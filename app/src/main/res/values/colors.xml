@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="sampdoria_blu">#003D7A</color>
+    <color name="sampdoria_blu_scuro">#00285A</color>
+    <color name="sampdoria_rosso">#D8232A</color>
+    <color name="sampdoria_bianco">#FFFFFF</color>
+    <color name="sampdoria_nero">#1A2332</color>
+</resources>
