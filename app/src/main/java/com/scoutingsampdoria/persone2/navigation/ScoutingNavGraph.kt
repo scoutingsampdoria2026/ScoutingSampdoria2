@@ -128,17 +128,7 @@ fun ScoutingNavGraph(factory: ViewModelFactory) {
             ConfigScreen(
                 configViewModel = configViewModel,
                 authViewModel = authViewModel,
-                onIndietro = { navController.popBackStack() },
-                onEsportaBackup = {
-                    // TODO in Fase 5: launcher backup + condivisione file
-                },
-                onImportaBackup = { launcher ->
-                    // TODO in Fase 5: launcher SAF per selezionare .db
-                },
-                onImportaXlsx = { launcher ->
-                    // TODO in Fase 5: launcher SAF per xlsx
-                },
-                infoUltimoBackup = null
+                onIndietro = { navController.popBackStack() }
             )
         }
 
