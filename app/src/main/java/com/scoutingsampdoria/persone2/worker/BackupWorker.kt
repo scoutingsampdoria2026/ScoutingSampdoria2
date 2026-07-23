@@ -33,8 +33,8 @@ class BackupWorker(context: Context, params: WorkerParameters) : CoroutineWorker
     override suspend fun doWork(): Result {
         val backupManager = BackupManager(applicationContext)
 
-        // Se non c'è cartella scelta, salta silenziosamente
-        if (backupManager.cartellaDestinazione() == null) {
+        // Se non ci sono credenziali GitHub configurate, salta silenziosamente
+        if (!backupManager.credenzialiConfigurate()) {
             // Ripianifico il OneTime per ritentare tra 6 ore (magari nel frattempo l'utente configura)
             pianificaOneTime(applicationContext, ritardoOre = 6)
             return Result.success()
