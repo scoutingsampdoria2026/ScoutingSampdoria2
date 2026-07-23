@@ -1,8 +1,5 @@
 package com.scoutingsampdoria.persone2.ui.screens
 
-import android.content.Intent
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -15,6 +12,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -23,14 +22,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.CloudDone
 import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
-import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Restore
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -65,7 +65,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.scoutingsampdoria.persone2.data.repository.BackupManager
+import com.scoutingsampdoria.persone2.data.repository.BackupRemoto
 import com.scoutingsampdoria.persone2.data.repository.RisultatoBackup
+import com.scoutingsampdoria.persone2.data.repository.RisultatoTest
 import com.scoutingsampdoria.persone2.ui.theme.SampColors
 import com.scoutingsampdoria.persone2.viewmodel.AuthViewModel
 import com.scoutingsampdoria.persone2.viewmodel.ConfigViewModel
@@ -85,45 +87,22 @@ fun ConfigScreen(
     LaunchedEffect(Unit) { configViewModel.caricaTutto() }
 
     var mostraDialogNuovoCampo by remember { mutableStateOf(false) }
+    var mostraDialogCredenziali by remember { mutableStateOf(false) }
+    var mostraDialogElencoBackup by remember { mutableStateOf(false) }
     var mostraCodicePerRipristino by remember { mutableStateOf(false) }
     var mostraCodicePerSvuota by remember { mutableStateOf(false) }
     var mostraDialogLog by remember { mutableStateOf(false) }
     var mostraDialogCambioCodice by remember { mutableStateOf(false) }
 
-    // Stato locale per feedback backup
-    var cartellaSelezionata by remember { mutableStateOf<android.net.Uri?>(null) }
+    var credenzialiOk by remember { mutableStateOf(false) }
     var descrizioneUltimoBackup by remember { mutableStateOf<String?>(null) }
     var backupInCorso by remember { mutableStateOf(false) }
     var esitoBackup by remember { mutableStateOf<String?>(null) }
-    var uriBackupDaRipristinare by remember { mutableStateOf<android.net.Uri?>(null) }
+    var backupDaRipristinare by remember { mutableStateOf<BackupRemoto?>(null) }
 
-    // Ricarico stato backup all'apertura
     LaunchedEffect(Unit) {
-        cartellaSelezionata = backupManager.cartellaDestinazione()
+        credenzialiOk = backupManager.credenzialiConfigurate()
         descrizioneUltimoBackup = backupManager.descrizioneUltimoBackup()
-    }
-
-    // Launcher SAF per scegliere cartella (una tantum)
-    val launcherSceltaCartella = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocumentTree()
-    ) { uri ->
-        if (uri != null) {
-            scope.launch {
-                backupManager.impostaCartellaDestinazione(uri)
-                cartellaSelezionata = uri
-                esitoBackup = "Cartella salvata"
-            }
-        }
-    }
-
-    // Launcher SAF per selezionare un .db da ripristinare
-    val launcherApriBackup = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.OpenDocument()
-    ) { uri ->
-        if (uri != null) {
-            uriBackupDaRipristinare = uri
-            mostraCodicePerRipristino = true
-        }
     }
 
     Scaffold(
@@ -151,7 +130,7 @@ fun ConfigScreen(
             modifier = Modifier.fillMaxSize().padding(padding)
                 .verticalScroll(rememberScrollState()).padding(16.dp)
         ) {
-            // Sezione campi custom
+            // ==== Sezione campi custom ====
             SezioneConfig(titolo = "Campi personalizzati") {
                 Text("Aggiungi colonne opzionali per ogni giocatore (es. CATEGORIA, RATING).",
                     style = MaterialTheme.typography.bodySmall,
@@ -189,22 +168,21 @@ fun ConfigScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // Sezione backup su cloud
-            SezioneConfig(titolo = "Backup su cloud") {
-                Text("Salva il database in una cartella (es. Google Drive) e ripristina all'occorrenza. " +
+            // ==== Sezione backup GitHub ====
+            SezioneConfig(titolo = "Backup su GitHub") {
+                Text("Salva il database come release su un repo GitHub privato. " +
                     "Il backup automatico gira ogni giorno se il tablet è online.",
                     style = MaterialTheme.typography.bodySmall,
                     color = SampColors.TestoSecondario)
                 Spacer(Modifier.height(10.dp))
 
-                // Stato cartella
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (cartellaSelezionata != null) {
+                    if (credenzialiOk) {
                         Icon(Icons.Filled.CloudDone, contentDescription = null,
                             tint = SampColors.Success)
                         Spacer(Modifier.width(6.dp))
                         Column(modifier = Modifier.weight(1f)) {
-                            Text("Cartella configurata",
+                            Text("GitHub configurato",
                                 style = MaterialTheme.typography.labelMedium,
                                 color = SampColors.Success, fontWeight = FontWeight.Bold)
                             descrizioneUltimoBackup?.let {
@@ -216,7 +194,7 @@ fun ConfigScreen(
                         Icon(Icons.Filled.CloudOff, contentDescription = null,
                             tint = SampColors.Warning)
                         Spacer(Modifier.width(6.dp))
-                        Text("Nessuna cartella selezionata",
+                        Text("GitHub non configurato",
                             style = MaterialTheme.typography.labelMedium,
                             color = SampColors.Warning, fontWeight = FontWeight.Bold,
                             modifier = Modifier.weight(1f))
@@ -226,13 +204,12 @@ fun ConfigScreen(
                 Spacer(Modifier.height(8.dp))
 
                 OutlinedButton(
-                    onClick = { launcherSceltaCartella.launch(null) },
+                    onClick = { mostraDialogCredenziali = true },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Filled.Folder, contentDescription = null)
+                    Icon(Icons.Filled.Settings, contentDescription = null)
                     Spacer(Modifier.width(4.dp))
-                    Text(if (cartellaSelezionata == null) "Scegli cartella backup"
-                         else "Cambia cartella")
+                    Text(if (credenzialiOk) "Modifica credenziali GitHub" else "Configura GitHub")
                 }
 
                 Spacer(Modifier.height(4.dp))
@@ -244,7 +221,7 @@ fun ConfigScreen(
                         scope.launch {
                             when (val r = backupManager.eseguiBackup()) {
                                 is RisultatoBackup.Successo -> {
-                                    esitoBackup = "Backup creato: ${r.nomeFile}"
+                                    esitoBackup = "Backup completato: ${r.nomeFile}"
                                     descrizioneUltimoBackup = backupManager.descrizioneUltimoBackup()
                                 }
                                 is RisultatoBackup.Errore -> esitoBackup = "Errore: ${r.messaggio}"
@@ -252,15 +229,13 @@ fun ConfigScreen(
                             backupInCorso = false
                         }
                     },
-                    enabled = cartellaSelezionata != null && !backupInCorso,
+                    enabled = credenzialiOk && !backupInCorso,
                     colors = ButtonDefaults.buttonColors(containerColor = SampColors.Success),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     if (backupInCorso) {
-                        CircularProgressIndicator(
-                            color = Color.White,
-                            modifier = Modifier.size(18.dp)
-                        )
+                        CircularProgressIndicator(color = Color.White,
+                            modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("Backup in corso...", color = Color.White)
                     } else {
@@ -273,10 +248,8 @@ fun ConfigScreen(
                 Spacer(Modifier.height(4.dp))
 
                 OutlinedButton(
-                    onClick = {
-                        // Filtro per file .db (uso mimetype generico + estensione)
-                        launcherApriBackup.launch(arrayOf("application/octet-stream", "*/*"))
-                    },
+                    onClick = { mostraDialogElencoBackup = true },
+                    enabled = credenzialiOk,
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Filled.Restore, contentDescription = null,
@@ -295,7 +268,7 @@ fun ConfigScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // Sezione sicurezza
+            // ==== Sicurezza ====
             SezioneConfig(titolo = "Sicurezza") {
                 OutlinedButton(
                     onClick = { mostraDialogCambioCodice = true },
@@ -309,7 +282,7 @@ fun ConfigScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // Sezione log
+            // ==== Log ====
             Card(
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = SampColors.BluNebbia),
@@ -334,7 +307,7 @@ fun ConfigScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // Zona pericolo
+            // ==== Zona pericolo ====
             Card(
                 shape = RoundedCornerShape(12.dp),
                 colors = CardDefaults.cardColors(containerColor = SampColors.RossoSoft),
@@ -399,22 +372,45 @@ fun ConfigScreen(
         )
     }
 
+    if (mostraDialogCredenziali) {
+        DialogCredenzialiGitHub(
+            backupManager = backupManager,
+            onChiudi = {
+                mostraDialogCredenziali = false
+                scope.launch { credenzialiOk = backupManager.credenzialiConfigurate() }
+            }
+        )
+    }
+
+    if (mostraDialogElencoBackup) {
+        DialogElencoBackup(
+            backupManager = backupManager,
+            onAnnulla = { mostraDialogElencoBackup = false },
+            onSeleziona = { backup ->
+                mostraDialogElencoBackup = false
+                backupDaRipristinare = backup
+                mostraCodicePerRipristino = true
+            }
+        )
+    }
+
     if (mostraCodicePerRipristino) {
         DialogCodiceProtezione(
             titolo = "Ripristina backup",
-            descrizione = "Il ripristino sovrascrive TUTTI i dati attuali. Inserisci il codice per confermare.",
+            descrizione = "Il ripristino sovrascriverà TUTTI i dati attuali. Inserisci il codice per confermare.",
             authViewModel = authViewModel,
             onAnnulla = {
                 mostraCodicePerRipristino = false
-                uriBackupDaRipristinare = null
+                backupDaRipristinare = null
             },
             onConfermato = {
                 mostraCodicePerRipristino = false
-                val uri = uriBackupDaRipristinare
-                uriBackupDaRipristinare = null
-                if (uri != null) {
+                val backup = backupDaRipristinare
+                backupDaRipristinare = null
+                if (backup != null) {
                     scope.launch {
-                        when (val r = backupManager.ripristinaBackup(uri)) {
+                        esitoBackup = "Download in corso..."
+                        when (val r = backupManager.ripristinaBackup(backup.urlDownload)) {
                             is RisultatoBackup.Successo ->
                                 esitoBackup = "Ripristino completato. Riavvia l'app per applicare."
                             is RisultatoBackup.Errore ->
@@ -493,6 +489,165 @@ private fun SezioneConfig(titolo: String, content: @Composable () -> Unit) {
             content()
         }
     }
+}
+
+@Composable
+private fun DialogCredenzialiGitHub(
+    backupManager: BackupManager,
+    onChiudi: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var owner by remember { mutableStateOf("") }
+    var repo by remember { mutableStateOf("") }
+    var token by remember { mutableStateOf("") }
+    var esitoTest by remember { mutableStateOf<String?>(null) }
+    var testInCorso by remember { mutableStateOf(false) }
+
+    // Precompila con eventuali valori esistenti
+    LaunchedEffect(Unit) {
+        owner = backupManager.ownerRepo() ?: ""
+        repo = backupManager.nomeRepo() ?: ""
+        // Non precompilo il token per sicurezza
+    }
+
+    AlertDialog(
+        onDismissRequest = onChiudi,
+        title = { Text("Credenziali GitHub", fontWeight = FontWeight.Bold) },
+        text = {
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                Text("Inserisci le credenziali del repo GitHub dove salvare i backup.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = SampColors.TestoSecondario)
+                Spacer(Modifier.height(12.dp))
+                OutlinedTextField(
+                    value = owner, onValueChange = { owner = it.trim() },
+                    label = { Text("Owner (es. scoutingsampdoria2026)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = repo, onValueChange = { repo = it.trim() },
+                    label = { Text("Nome repo (es. scouting-backups)") },
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                Spacer(Modifier.height(6.dp))
+                OutlinedTextField(
+                    value = token, onValueChange = { token = it.trim() },
+                    label = { Text("Personal Access Token") },
+                    placeholder = { Text("github_pat_...") },
+                    visualTransformation = PasswordVisualTransformation(),
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
+                )
+                esitoTest?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, style = MaterialTheme.typography.labelSmall,
+                        color = if (it.startsWith("OK")) SampColors.Success
+                                else MaterialTheme.colorScheme.error)
+                }
+                Spacer(Modifier.height(8.dp))
+                Text("Il token è salvato cifrato sul dispositivo.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SampColors.TestoMuto)
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = {
+                    scope.launch {
+                        // Prima salva, poi testa
+                        if (token.isNotBlank()) {
+                            backupManager.impostaCredenziali(owner, repo, token)
+                        } else if (owner.isNotBlank() && repo.isNotBlank()) {
+                            // Aggiorna solo owner/repo mantenendo il token esistente
+                            val tokenAttuale = backupManager.tokenGitHub()
+                            if (tokenAttuale != null) {
+                                backupManager.impostaCredenziali(owner, repo, tokenAttuale)
+                            }
+                        }
+                        testInCorso = true
+                        when (val r = backupManager.testaCredenziali()) {
+                            is RisultatoTest.Successo -> {
+                                esitoTest = "OK - Repo raggiungibile"
+                            }
+                            is RisultatoTest.Errore -> esitoTest = r.messaggio
+                        }
+                        testInCorso = false
+                    }
+                },
+                enabled = !testInCorso &&
+                    ((owner.isNotBlank() && repo.isNotBlank() && token.isNotBlank()) ||
+                     (owner.isNotBlank() && repo.isNotBlank()))
+            ) {
+                if (testInCorso) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp))
+                } else {
+                    Text("Salva e testa")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onChiudi) { Text("Chiudi") }
+        }
+    )
+}
+
+@Composable
+private fun DialogElencoBackup(
+    backupManager: BackupManager,
+    onAnnulla: () -> Unit,
+    onSeleziona: (BackupRemoto) -> Unit,
+) {
+    var lista by remember { mutableStateOf<List<BackupRemoto>>(emptyList()) }
+    var caricamento by remember { mutableStateOf(true) }
+
+    LaunchedEffect(Unit) {
+        lista = backupManager.elencoBackup()
+        caricamento = false
+    }
+
+    AlertDialog(
+        onDismissRequest = onAnnulla,
+        title = { Text("Backup disponibili", fontWeight = FontWeight.Bold) },
+        text = {
+            Box(modifier = Modifier.fillMaxWidth().height(360.dp)) {
+                when {
+                    caricamento -> Box(Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = SampColors.Blu)
+                    }
+                    lista.isEmpty() -> Text("Nessun backup trovato sul repo.",
+                        color = SampColors.TestoMuto)
+                    else -> LazyColumn {
+                        items(lista) { backup ->
+                            Card(
+                                shape = RoundedCornerShape(8.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
+                                onClick = { onSeleziona(backup) },
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp)
+                            ) {
+                                Column(modifier = Modifier.padding(10.dp)) {
+                                    Text(backup.nome, fontWeight = FontWeight.Bold,
+                                        color = SampColors.Blu)
+                                    Text(backup.nomeFile,
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = SampColors.TestoSecondario)
+                                    Text("Creato: ${backup.createdAt}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = SampColors.TestoMuto)
+                                    Text("${backup.dimensioneByte / 1024} KB",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = SampColors.TestoMuto)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onAnnulla) { Text("Chiudi") }
+        }
+    )
 }
 
 @Composable
