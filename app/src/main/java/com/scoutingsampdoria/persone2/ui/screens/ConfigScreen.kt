@@ -1,6 +1,5 @@
 package com.scoutingsampdoria.persone2.ui.screens
 
-import android.app.Activity
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -18,23 +17,27 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Backup
+import androidx.compose.material.icons.filled.CloudDone
+import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DeleteForever
+import androidx.compose.material.icons.filled.Folder
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Restore
-import androidx.compose.material.icons.filled.UploadFile
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -51,6 +54,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -60,10 +64,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
-import androidx.compose.foundation.text.KeyboardOptions
+import com.scoutingsampdoria.persone2.data.repository.BackupManager
+import com.scoutingsampdoria.persone2.data.repository.RisultatoBackup
 import com.scoutingsampdoria.persone2.ui.theme.SampColors
 import com.scoutingsampdoria.persone2.viewmodel.AuthViewModel
 import com.scoutingsampdoria.persone2.viewmodel.ConfigViewModel
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -71,12 +77,11 @@ fun ConfigScreen(
     configViewModel: ConfigViewModel,
     authViewModel: AuthViewModel,
     onIndietro: () -> Unit,
-    // Callback verso chi gestisce backup/ripristino/import (li useremo per lanciare i file picker)
-    onEsportaBackup: () -> Unit,
-    onImportaBackup: (androidx.activity.result.ActivityResultLauncher<Intent>) -> Unit,
-    onImportaXlsx: (androidx.activity.result.ActivityResultLauncher<Intent>) -> Unit,
-    infoUltimoBackup: String? = null,
 ) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val backupManager = remember { BackupManager(context) }
+
     LaunchedEffect(Unit) { configViewModel.caricaTutto() }
 
     var mostraDialogNuovoCampo by remember { mutableStateOf(false) }
@@ -85,15 +90,41 @@ fun ConfigScreen(
     var mostraDialogLog by remember { mutableStateOf(false) }
     var mostraDialogCambioCodice by remember { mutableStateOf(false) }
 
-    // Launcher file picker per ripristino
-    val launcherRipristino = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { /* handled via callback */ }
+    // Stato locale per feedback backup
+    var cartellaSelezionata by remember { mutableStateOf<android.net.Uri?>(null) }
+    var descrizioneUltimoBackup by remember { mutableStateOf<String?>(null) }
+    var backupInCorso by remember { mutableStateOf(false) }
+    var esitoBackup by remember { mutableStateOf<String?>(null) }
+    var uriBackupDaRipristinare by remember { mutableStateOf<android.net.Uri?>(null) }
 
-    // Launcher file picker per import xlsx
-    val launcherImportXlsx = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.StartActivityForResult()
-    ) { /* handled via callback */ }
+    // Ricarico stato backup all'apertura
+    LaunchedEffect(Unit) {
+        cartellaSelezionata = backupManager.cartellaDestinazione()
+        descrizioneUltimoBackup = backupManager.descrizioneUltimoBackup()
+    }
+
+    // Launcher SAF per scegliere cartella (una tantum)
+    val launcherSceltaCartella = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocumentTree()
+    ) { uri ->
+        if (uri != null) {
+            scope.launch {
+                backupManager.impostaCartellaDestinazione(uri)
+                cartellaSelezionata = uri
+                esitoBackup = "Cartella salvata"
+            }
+        }
+    }
+
+    // Launcher SAF per selezionare un .db da ripristinare
+    val launcherApriBackup = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument()
+    ) { uri ->
+        if (uri != null) {
+            uriBackupDaRipristinare = uri
+            mostraCodicePerRipristino = true
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -158,54 +189,107 @@ fun ConfigScreen(
 
             Spacer(Modifier.height(12.dp))
 
-            // Sezione import dati
-            SezioneConfig(titolo = "Importa dati") {
-                Text("Importa un file XLSX (formato dell'app 1.0). Colonne extra verranno registrate come campi custom.",
+            // Sezione backup su cloud
+            SezioneConfig(titolo = "Backup su cloud") {
+                Text("Salva il database in una cartella (es. Google Drive) e ripristina all'occorrenza. " +
+                    "Il backup automatico gira ogni giorno se il tablet è online.",
                     style = MaterialTheme.typography.bodySmall,
                     color = SampColors.TestoSecondario)
+                Spacer(Modifier.height(10.dp))
+
+                // Stato cartella
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (cartellaSelezionata != null) {
+                        Icon(Icons.Filled.CloudDone, contentDescription = null,
+                            tint = SampColors.Success)
+                        Spacer(Modifier.width(6.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text("Cartella configurata",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = SampColors.Success, fontWeight = FontWeight.Bold)
+                            descrizioneUltimoBackup?.let {
+                                Text(it, style = MaterialTheme.typography.labelSmall,
+                                    color = SampColors.TestoMuto)
+                            }
+                        }
+                    } else {
+                        Icon(Icons.Filled.CloudOff, contentDescription = null,
+                            tint = SampColors.Warning)
+                        Spacer(Modifier.width(6.dp))
+                        Text("Nessuna cartella selezionata",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = SampColors.Warning, fontWeight = FontWeight.Bold,
+                            modifier = Modifier.weight(1f))
+                    }
+                }
+
                 Spacer(Modifier.height(8.dp))
-                Button(
-                    onClick = { onImportaXlsx(launcherImportXlsx) },
-                    colors = ButtonDefaults.buttonColors(containerColor = SampColors.Info),
+
+                OutlinedButton(
+                    onClick = { launcherSceltaCartella.launch(null) },
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Filled.UploadFile, contentDescription = null, tint = Color.White)
+                    Icon(Icons.Filled.Folder, contentDescription = null)
                     Spacer(Modifier.width(4.dp))
-                    Text("Importa da XLSX", color = Color.White)
+                    Text(if (cartellaSelezionata == null) "Scegli cartella backup"
+                         else "Cambia cartella")
                 }
-            }
 
-            Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(4.dp))
 
-            // Sezione backup
-            SezioneConfig(titolo = "Backup e ripristino") {
-                Text("Salva o ripristina l'intero database.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = SampColors.TestoSecondario)
-                infoUltimoBackup?.let {
-                    Spacer(Modifier.height(4.dp))
-                    Text(it, style = MaterialTheme.typography.labelSmall,
-                        color = SampColors.TestoMuto)
-                }
-                Spacer(Modifier.height(8.dp))
                 Button(
-                    onClick = onEsportaBackup,
+                    onClick = {
+                        backupInCorso = true
+                        esitoBackup = null
+                        scope.launch {
+                            when (val r = backupManager.eseguiBackup()) {
+                                is RisultatoBackup.Successo -> {
+                                    esitoBackup = "Backup creato: ${r.nomeFile}"
+                                    descrizioneUltimoBackup = backupManager.descrizioneUltimoBackup()
+                                }
+                                is RisultatoBackup.Errore -> esitoBackup = "Errore: ${r.messaggio}"
+                            }
+                            backupInCorso = false
+                        }
+                    },
+                    enabled = cartellaSelezionata != null && !backupInCorso,
                     colors = ButtonDefaults.buttonColors(containerColor = SampColors.Success),
                     modifier = Modifier.fillMaxWidth()
                 ) {
-                    Icon(Icons.Filled.Backup, contentDescription = null, tint = Color.White)
-                    Spacer(Modifier.width(4.dp))
-                    Text("Esporta backup", color = Color.White)
+                    if (backupInCorso) {
+                        CircularProgressIndicator(
+                            color = Color.White,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text("Backup in corso...", color = Color.White)
+                    } else {
+                        Icon(Icons.Filled.Backup, contentDescription = null, tint = Color.White)
+                        Spacer(Modifier.width(4.dp))
+                        Text("Esegui backup ora", color = Color.White)
+                    }
                 }
+
                 Spacer(Modifier.height(4.dp))
+
                 OutlinedButton(
-                    onClick = { mostraCodicePerRipristino = true },
+                    onClick = {
+                        // Filtro per file .db (uso mimetype generico + estensione)
+                        launcherApriBackup.launch(arrayOf("application/octet-stream", "*/*"))
+                    },
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Icon(Icons.Filled.Restore, contentDescription = null,
                         tint = SampColors.Warning)
                     Spacer(Modifier.width(4.dp))
-                    Text("Ripristina backup", color = SampColors.Warning)
+                    Text("Ripristina da backup", color = SampColors.Warning)
+                }
+
+                esitoBackup?.let {
+                    Spacer(Modifier.height(6.dp))
+                    Text(it, style = MaterialTheme.typography.labelSmall,
+                        color = if (it.startsWith("Errore")) SampColors.ErrorColor
+                                else SampColors.Success)
                 }
             }
 
@@ -300,8 +384,7 @@ fun ConfigScreen(
                 OutlinedTextField(
                     value = nome, onValueChange = { nome = it },
                     label = { Text("Nome (es. AGENTE)") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
             },
             confirmButton = {
@@ -319,12 +402,26 @@ fun ConfigScreen(
     if (mostraCodicePerRipristino) {
         DialogCodiceProtezione(
             titolo = "Ripristina backup",
-            descrizione = "Il ripristino sovrascrive tutti i dati attuali. Inserisci il codice per confermare.",
+            descrizione = "Il ripristino sovrascrive TUTTI i dati attuali. Inserisci il codice per confermare.",
             authViewModel = authViewModel,
-            onAnnulla = { mostraCodicePerRipristino = false },
+            onAnnulla = {
+                mostraCodicePerRipristino = false
+                uriBackupDaRipristinare = null
+            },
             onConfermato = {
                 mostraCodicePerRipristino = false
-                onImportaBackup(launcherRipristino)
+                val uri = uriBackupDaRipristinare
+                uriBackupDaRipristinare = null
+                if (uri != null) {
+                    scope.launch {
+                        when (val r = backupManager.ripristinaBackup(uri)) {
+                            is RisultatoBackup.Successo ->
+                                esitoBackup = "Ripristino completato. Riavvia l'app per applicare."
+                            is RisultatoBackup.Errore ->
+                                esitoBackup = "Errore ripristino: ${r.messaggio}"
+                        }
+                    }
+                }
             }
         )
     }
@@ -349,8 +446,7 @@ fun ConfigScreen(
             text = {
                 Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
                     if (configViewModel.logs.isEmpty()) {
-                        Text("Nessuna operazione registrata.",
-                            color = SampColors.TestoMuto)
+                        Text("Nessuna operazione registrata.", color = SampColors.TestoMuto)
                     } else {
                         configViewModel.logs.forEach { log ->
                             Row(modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp)) {
@@ -426,8 +522,7 @@ private fun DialogCodiceProtezione(
                     label = { Text("Codice") },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth()
+                    singleLine = true, modifier = Modifier.fillMaxWidth()
                 )
                 errore?.let {
                     Text(it, color = MaterialTheme.colorScheme.error,
@@ -437,10 +532,7 @@ private fun DialogCodiceProtezione(
         },
         confirmButton = {
             Button(onClick = {
-                // Verifico il codice usando authViewModel: creo un tentativo temporaneo
                 authViewModel.tentaSblocco(codice)
-                // NOTA: authViewModel.sbloccato è già true (siamo dentro l'app),
-                // quindi controllo se il codice è quello corrente. Per semplicità:
                 if (authViewModel.errore == null) {
                     onConfermato()
                 } else {
@@ -511,7 +603,6 @@ private fun DialogCambioCodice(
                 Button(onClick = {
                     if (nuovo != conferma) { errore = "I due codici non coincidono"; return@Button }
                     if (nuovo.length < 4) { errore = "Il codice deve avere almeno 4 cifre"; return@Button }
-                    // Verifica codice vecchio
                     authViewModel.tentaSblocco(vecchio)
                     if (authViewModel.errore != null) {
                         errore = "Codice attuale errato"
