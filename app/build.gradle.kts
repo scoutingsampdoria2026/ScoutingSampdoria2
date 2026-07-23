@@ -100,4 +100,7 @@ dependencies {
 
     // DataStore per preferenze (codice sblocco, ecc.)
     implementation("androidx.datastore:datastore-preferences:1.1.1")
+
+    // DocumentFile per gestire cartelle SAF (Google Drive, ecc.)
+    implementation("androidx.documentfile:documentfile:1.0.1")
 }
