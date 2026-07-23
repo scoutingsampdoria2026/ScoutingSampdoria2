@@ -101,6 +101,9 @@ dependencies {
     // DataStore per preferenze (codice sblocco, ecc.)
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
-    // DocumentFile per gestire cartelle SAF (Google Drive, ecc.)
-    implementation("androidx.documentfile:documentfile:1.0.1")
+    // OkHttp per chiamate HTTPS a GitHub API
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+
+    // Security Crypto per salvare il token GitHub cifrato
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
 }
