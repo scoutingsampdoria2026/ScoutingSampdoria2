@@ -1,59 +1,85 @@
 package com.scoutingsampdoria.persone2.data.repository
 
 import android.content.Context
-import android.content.Intent
-import android.net.Uri
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
-import androidx.documentfile.provider.DocumentFile
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKey
 import com.scoutingsampdoria.persone2.data.db.ScoutingDatabase
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 
 private val Context.backupDataStore by preferencesDataStore(name = "scouting_backup")
 
 /**
- * Gestisce l'export e l'import del database Room in file .db.
- * Il file di backup è la copia bit-per-bit del file SQLite.
- * L'URI della cartella di destinazione (es. una cartella su Google Drive)
- * è memorizzato in DataStore, insieme al timestamp dell'ultimo backup.
+ * Gestisce backup e ripristino del DB caricando/scaricando file .db
+ * come "release assets" su un repository GitHub privato.
  */
 class BackupManager(private val context: Context) {
 
-    /** Restituisce l'URI persistente della cartella scelta per i backup, o null. */
-    suspend fun cartellaDestinazione(): Uri? {
-        val prefs = context.backupDataStore.data.first()
-        val uriStringa = prefs[CHIAVE_CARTELLA_URI] ?: return null
-        return runCatching { Uri.parse(uriStringa) }.getOrNull()
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(60, TimeUnit.SECONDS)
+        .writeTimeout(120, TimeUnit.SECONDS)
+        .build()
+
+    private val prefsCifrate by lazy {
+        val masterKey = MasterKey.Builder(context)
+            .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+            .build()
+        EncryptedSharedPreferences.create(
+            context,
+            "scouting_secure",
+            masterKey,
+            EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+            EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+        )
     }
 
-    /** Salva la cartella scelta e richiede il permesso persistente su di essa. */
-    suspend fun impostaCartellaDestinazione(uri: Uri) {
-        // Chiedo permesso persistente lettura+scrittura sulla cartella
-        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
-                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        try {
-            context.contentResolver.takePersistableUriPermission(uri, flags)
-        } catch (_: SecurityException) {
-            // Non tutti i provider concedono permessi persistenti (es. Drive richiede il flag già presente)
-        }
+    suspend fun ownerRepo(): String? = context.backupDataStore.data.first()[CHIAVE_OWNER]
+    suspend fun nomeRepo(): String? = context.backupDataStore.data.first()[CHIAVE_REPO]
+
+    fun tokenGitHub(): String? = prefsCifrate.getString(CHIAVE_TOKEN, null)?.takeIf { it.isNotBlank() }
+
+    suspend fun impostaCredenziali(owner: String, repo: String, token: String) {
         context.backupDataStore.edit { prefs ->
-            prefs[CHIAVE_CARTELLA_URI] = uri.toString()
+            prefs[CHIAVE_OWNER] = owner.trim()
+            prefs[CHIAVE_REPO] = repo.trim()
         }
+        prefsCifrate.edit().putString(CHIAVE_TOKEN, token.trim()).apply()
     }
 
-    /** Timestamp dell'ultimo backup effettuato (millisecondi epoch), o null. */
+    suspend fun cancellaCredenziali() {
+        context.backupDataStore.edit { prefs ->
+            prefs.remove(CHIAVE_OWNER)
+            prefs.remove(CHIAVE_REPO)
+        }
+        prefsCifrate.edit().remove(CHIAVE_TOKEN).apply()
+    }
+
+    suspend fun credenzialiConfigurate(): Boolean {
+        return !ownerRepo().isNullOrBlank() &&
+               !nomeRepo().isNullOrBlank() &&
+               !tokenGitHub().isNullOrBlank()
+    }
+
     suspend fun timestampUltimoBackup(): Long? {
-        val prefs = context.backupDataStore.data.first()
-        return prefs[CHIAVE_ULTIMO_BACKUP]
+        return context.backupDataStore.data.first()[CHIAVE_ULTIMO_BACKUP]
     }
 
     suspend fun descrizioneUltimoBackup(): String? {
@@ -62,84 +88,201 @@ class BackupManager(private val context: Context) {
         return "Ultimo backup: ${fmt.format(Date(ts))}"
     }
 
-    /**
-     * Esegue un backup del DB scrivendo un file .db nella cartella persistente scelta.
-     * Restituisce l'URI del file creato, o null in caso di errore.
-     */
-    suspend fun eseguiBackup(): RisultatoBackup {
-        val cartella = cartellaDestinazione()
-            ?: return RisultatoBackup.Errore("Nessuna cartella di backup selezionata")
-
-        val destDir = DocumentFile.fromTreeUri(context, cartella)
-            ?: return RisultatoBackup.Errore("Cartella non accessibile")
-
-        if (!destDir.canWrite()) {
-            return RisultatoBackup.Errore("La cartella scelta non è scrivibile")
+    /** Esegue un backup caricando il file .db come release GitHub. */
+    suspend fun eseguiBackup(): RisultatoBackup = withContext(Dispatchers.IO) {
+        if (!credenzialiConfigurate()) {
+            return@withContext RisultatoBackup.Errore("Credenziali GitHub non configurate")
         }
+        val owner = ownerRepo()!!
+        val repo = nomeRepo()!!
+        val token = tokenGitHub()!!
 
-        // Chiudo il DB prima di copiarne il file per evitare corruzioni
         ScoutingDatabase.invalida()
-
         val fileDb = File(ScoutingDatabase.percorsoFile(context))
         if (!fileDb.exists()) {
-            return RisultatoBackup.Errore("Database non trovato")
+            return@withContext RisultatoBackup.Errore("Database non trovato")
         }
 
-        val fmt = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.ITALIAN)
-        val nomeFile = "scouting_backup_${fmt.format(Date())}.db"
+        val fmt = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ITALIAN)
+        val timestamp = fmt.format(Date())
+        val tag = "backup-$timestamp"
+        val nomeFile = "scouting_backup_$timestamp.db"
 
-        val fileDest = destDir.createFile("application/octet-stream", nomeFile)
-            ?: return RisultatoBackup.Errore("Impossibile creare il file destinazione")
+        try {
+            // 1. Crea la release
+            val corpoRelease = JSONObject().apply {
+                put("tag_name", tag)
+                put("name", "Backup $timestamp")
+                put("body", "Backup automatico DB Scouting Sampdoria")
+                put("draft", false)
+                put("prerelease", false)
+            }.toString()
 
-        return try {
-            context.contentResolver.openOutputStream(fileDest.uri)?.use { output ->
-                FileInputStream(fileDb).use { input ->
-                    input.copyTo(output)
-                }
-            } ?: return RisultatoBackup.Errore("Impossibile aprire il file destinazione")
+            val reqCreaRelease = Request.Builder()
+                .url("https://api.github.com/repos/$owner/$repo/releases")
+                .header("Authorization", "Bearer $token")
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .post(corpoRelease.toRequestBody("application/json".toMediaTypeOrNull()))
+                .build()
 
-            // Aggiorno timestamp ultimo backup
+            val respRelease = client.newCall(reqCreaRelease).execute()
+            if (!respRelease.isSuccessful) {
+                val err = respRelease.body?.string()?.take(200) ?: ""
+                respRelease.close()
+                return@withContext RisultatoBackup.Errore(
+                    "Errore creazione release (${respRelease.code}): $err"
+                )
+            }
+
+            val bodyRelease = respRelease.body?.string() ?: ""
+            respRelease.close()
+            val jsonRelease = JSONObject(bodyRelease)
+            val uploadUrl = jsonRelease.getString("upload_url")
+                .replace("{?name,label}", "?name=$nomeFile")
+
+            // 2. Carica il file .db come asset
+            val reqUpload = Request.Builder()
+                .url(uploadUrl)
+                .header("Authorization", "Bearer $token")
+                .header("Accept", "application/vnd.github+json")
+                .header("Content-Type", "application/octet-stream")
+                .post(fileDb.readBytes().toRequestBody("application/octet-stream".toMediaTypeOrNull()))
+                .build()
+
+            val respUpload = client.newCall(reqUpload).execute()
+            if (!respUpload.isSuccessful) {
+                val err = respUpload.body?.string()?.take(200) ?: ""
+                respUpload.close()
+                return@withContext RisultatoBackup.Errore(
+                    "Errore upload file (${respUpload.code}): $err"
+                )
+            }
+            respUpload.close()
+
+            // 3. Aggiorna timestamp
             context.backupDataStore.edit { prefs ->
                 prefs[CHIAVE_ULTIMO_BACKUP] = System.currentTimeMillis()
             }
-            // Riapro il DB (verrà ricreato al prossimo accesso)
+
             ScoutingDatabase.get(context)
-            RisultatoBackup.Successo(fileDest.uri, nomeFile)
+            RisultatoBackup.Successo(nomeFile, tag)
         } catch (e: Exception) {
-            RisultatoBackup.Errore("Errore durante il backup: ${e.message}")
+            RisultatoBackup.Errore("Errore rete: ${e.message}")
         }
     }
 
-    /**
-     * Ripristina il database da un file .db scelto dall'utente.
-     * Sovrascrive completamente il DB corrente.
-     */
-    suspend fun ripristinaBackup(fileBackupUri: Uri): RisultatoBackup {
-        return try {
-            // Chiudo il DB corrente
-            ScoutingDatabase.invalida()
+    /** Elenca i backup disponibili come release. */
+    suspend fun elencoBackup(): List<BackupRemoto> = withContext(Dispatchers.IO) {
+        if (!credenzialiConfigurate()) return@withContext emptyList()
+        val owner = ownerRepo()!!
+        val repo = nomeRepo()!!
+        val token = tokenGitHub()!!
 
+        try {
+            val req = Request.Builder()
+                .url("https://api.github.com/repos/$owner/$repo/releases?per_page=100")
+                .header("Authorization", "Bearer $token")
+                .header("Accept", "application/vnd.github+json")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .get()
+                .build()
+
+            val resp = client.newCall(req).execute()
+            if (!resp.isSuccessful) {
+                resp.close()
+                return@withContext emptyList()
+            }
+            val body = resp.body?.string() ?: "[]"
+            resp.close()
+
+            val arr = JSONArray(body)
+            val lista = mutableListOf<BackupRemoto>()
+            for (i in 0 until arr.length()) {
+                val rel = arr.getJSONObject(i)
+                val tag = rel.getString("tag_name")
+                val name = rel.optString("name", tag)
+                val createdAt = rel.optString("created_at", "")
+                val assets = rel.getJSONArray("assets")
+                if (assets.length() == 0) continue
+                val primoAsset = assets.getJSONObject(0)
+                val urlDownload = primoAsset.getString("url")
+                val nomeFile = primoAsset.getString("name")
+                val dimensione = primoAsset.optLong("size", 0)
+                lista.add(BackupRemoto(tag, name, createdAt, urlDownload, nomeFile, dimensione))
+            }
+            lista
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    /** Ripristina il DB scaricando un asset dal repo GitHub. */
+    suspend fun ripristinaBackup(urlAsset: String): RisultatoBackup = withContext(Dispatchers.IO) {
+        val token = tokenGitHub() ?: return@withContext RisultatoBackup.Errore("Token mancante")
+        try {
+            val req = Request.Builder()
+                .url(urlAsset)
+                .header("Authorization", "Bearer $token")
+                .header("Accept", "application/octet-stream")
+                .header("X-GitHub-Api-Version", "2022-11-28")
+                .get()
+                .build()
+
+            val resp = client.newCall(req).execute()
+            if (!resp.isSuccessful) {
+                val err = resp.body?.string()?.take(200) ?: ""
+                resp.close()
+                return@withContext RisultatoBackup.Errore("Errore download (${resp.code}): $err")
+            }
+
+            ScoutingDatabase.invalida()
             val fileDb = File(ScoutingDatabase.percorsoFile(context))
-            // Sovrascrivo il file
-            context.contentResolver.openInputStream(fileBackupUri)?.use { input ->
+            resp.body?.byteStream()?.use { input ->
                 FileOutputStream(fileDb).use { output ->
                     input.copyTo(output)
                 }
-            } ?: return RisultatoBackup.Errore("Impossibile leggere il file selezionato")
+            }
+            resp.close()
 
-            // Rimuovo eventuali file -shm e -wal per evitare inconsistenze
             File("${fileDb.absolutePath}-shm").takeIf { it.exists() }?.delete()
             File("${fileDb.absolutePath}-wal").takeIf { it.exists() }?.delete()
 
-            // Il DB verrà ricreato al prossimo accesso
-            RisultatoBackup.Successo(fileBackupUri, "ripristinato")
+            RisultatoBackup.Successo("ripristinato", "")
         } catch (e: Exception) {
-            RisultatoBackup.Errore("Errore durante il ripristino: ${e.message}")
+            RisultatoBackup.Errore("Errore rete: ${e.message}")
+        }
+    }
+
+    /** Testa le credenziali facendo una GET al repo. */
+    suspend fun testaCredenziali(): RisultatoTest = withContext(Dispatchers.IO) {
+        if (!credenzialiConfigurate()) return@withContext RisultatoTest.Errore("Credenziali incomplete")
+        val owner = ownerRepo()!!
+        val repo = nomeRepo()!!
+        val token = tokenGitHub()!!
+
+        try {
+            val req = Request.Builder()
+                .url("https://api.github.com/repos/$owner/$repo")
+                .header("Authorization", "Bearer $token")
+                .header("Accept", "application/vnd.github+json")
+                .get()
+                .build()
+            val resp = client.newCall(req).execute()
+            val ok = resp.isSuccessful
+            val codice = resp.code
+            resp.close()
+            if (ok) RisultatoTest.Successo
+            else RisultatoTest.Errore("Repository non accessibile (HTTP $codice)")
+        } catch (e: Exception) {
+            RisultatoTest.Errore("Errore rete: ${e.message}")
         }
     }
 
     companion object {
-        private val CHIAVE_CARTELLA_URI = stringPreferencesKey("cartella_backup_uri")
+        private val CHIAVE_OWNER = stringPreferencesKey("gh_owner")
+        private val CHIAVE_REPO = stringPreferencesKey("gh_repo")
+        private const val CHIAVE_TOKEN = "gh_token"
         private val CHIAVE_ULTIMO_BACKUP = longPreferencesKey("ultimo_backup_ts")
 
         const val NOME_WORKER_BACKUP = "backup_automatico"
@@ -148,6 +291,20 @@ class BackupManager(private val context: Context) {
 }
 
 sealed class RisultatoBackup {
-    data class Successo(val uri: Uri, val nomeFile: String) : RisultatoBackup()
+    data class Successo(val nomeFile: String, val tag: String) : RisultatoBackup()
     data class Errore(val messaggio: String) : RisultatoBackup()
 }
+
+sealed class RisultatoTest {
+    object Successo : RisultatoTest()
+    data class Errore(val messaggio: String) : RisultatoTest()
+}
+
+data class BackupRemoto(
+    val tag: String,
+    val nome: String,
+    val createdAt: String,
+    val urlDownload: String,
+    val nomeFile: String,
+    val dimensioneByte: Long,
+)
