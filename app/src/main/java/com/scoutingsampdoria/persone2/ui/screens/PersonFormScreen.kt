@@ -1,6 +1,7 @@
 package com.scoutingsampdoria.persone2.ui.screens
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -11,10 +12,12 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Save
 import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.outlined.StarBorder
@@ -26,6 +29,9 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -42,6 +48,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.scoutingsampdoria.persone2.data.model.Persona
 import com.scoutingsampdoria.persone2.ui.theme.SampColors
@@ -72,6 +79,13 @@ fun PersonFormScreen(
     var quickReport by remember { mutableStateOf("") }
     val valoriExtra = remember { mutableStateMapOf<String, String>() }
     var inizializzato by remember { mutableStateOf(false) }
+
+    // Nuovo giocatore: default STATO = "Segnalato"
+    LaunchedEffect(nuovaPersona) {
+        if (nuovaPersona && valoriExtra["STATO"].isNullOrBlank()) {
+            valoriExtra["STATO"] = "Segnalato"
+        }
+    }
 
     // Popolo campi dopo il caricamento
     LaunchedEffect(viewModel.personaSelezionata) {
@@ -148,18 +162,27 @@ fun PersonFormScreen(
                     Text("Campi personalizzati", fontWeight = FontWeight.Bold, color = SampColors.Blu)
                     Spacer(Modifier.height(8.dp))
                     viewModel.campiCustom.forEach { campo ->
-                        if (campo.nome.equals("RATING", ignoreCase = true)) {
-                            SelettoreStelle(
-                                valore = valoriExtra[campo.nome]?.toIntOrNull() ?: 0,
-                                onValoreCambiato = { nuovo ->
-                                    valoriExtra[campo.nome] = if (nuovo == 0) "" else nuovo.toString()
-                                }
-                            )
-                        } else {
-                            CampoTesto(
-                                etichetta = campo.nome,
-                                valore = valoriExtra[campo.nome] ?: ""
-                            ) { valoriExtra[campo.nome] = it }
+                        when {
+                            campo.nome.equals("RATING", ignoreCase = true) -> {
+                                SelettoreStelle(
+                                    valore = valoriExtra[campo.nome]?.toIntOrNull() ?: 0,
+                                    onValoreCambiato = { nuovo ->
+                                        valoriExtra[campo.nome] = if (nuovo == 0) "" else nuovo.toString()
+                                    }
+                                )
+                            }
+                            campo.nome.equals("STATO", ignoreCase = true) -> {
+                                SelettoreStato(
+                                    valore = valoriExtra[campo.nome] ?: "Segnalato",
+                                    onValoreCambiato = { nuovo -> valoriExtra[campo.nome] = nuovo }
+                                )
+                            }
+                            else -> {
+                                CampoTesto(
+                                    etichetta = campo.nome,
+                                    valore = valoriExtra[campo.nome] ?: ""
+                                ) { valoriExtra[campo.nome] = it }
+                            }
                         }
                     }
                 }
@@ -245,6 +268,86 @@ private fun SelettoreStelle(valore: Int, onValoreCambiato: (Int) -> Unit) {
                     fontWeight = FontWeight.Bold,
                     color = if (valore > 0) SampColors.Warning else SampColors.TestoMuto
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SelettoreStato(valore: String, onValoreCambiato: (String) -> Unit) {
+    val opzioni = listOf("Segnalato", "Prova", "Da Rivedere", "Approvato", "Scartato")
+    var menuAperto by remember { mutableStateOf(false) }
+    val valoreEffettivo = if (valore in opzioni) valore else "Segnalato"
+
+    val coloreBadge = when (valoreEffettivo) {
+        "Segnalato" -> SampColors.Info
+        "Prova" -> SampColors.Warning
+        "Da Rivedere" -> SampColors.BluChiaro
+        "Approvato" -> SampColors.Success
+        "Scartato" -> SampColors.ErrorColor
+        else -> SampColors.TestoSecondario
+    }
+
+    Column(modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Text(
+            "STATO",
+            style = MaterialTheme.typography.labelMedium,
+            color = SampColors.TestoSecondario,
+            fontWeight = FontWeight.Medium
+        )
+        Spacer(Modifier.height(4.dp))
+        Box {
+            OutlinedButton(
+                onClick = { menuAperto = true },
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(12.dp)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .size(12.dp)
+                        .background(coloreBadge, CircleShape)
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = valoreEffettivo,
+                    fontWeight = FontWeight.Bold,
+                    color = SampColors.Nero,
+                    modifier = Modifier.weight(1f),
+                    textAlign = TextAlign.Start
+                )
+                Icon(Icons.Filled.ArrowDropDown, contentDescription = null)
+            }
+            DropdownMenu(
+                expanded = menuAperto,
+                onDismissRequest = { menuAperto = false }
+            ) {
+                opzioni.forEach { op ->
+                    val col = when (op) {
+                        "Segnalato" -> SampColors.Info
+                        "Prova" -> SampColors.Warning
+                        "Da Rivedere" -> SampColors.BluChiaro
+                        "Approvato" -> SampColors.Success
+                        "Scartato" -> SampColors.ErrorColor
+                        else -> SampColors.TestoSecondario
+                    }
+                    DropdownMenuItem(
+                        text = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(12.dp)
+                                        .background(col, CircleShape)
+                                )
+                                Spacer(Modifier.width(8.dp))
+                                Text(op, fontWeight = if (op == valoreEffettivo) FontWeight.Bold else FontWeight.Normal)
+                            }
+                        },
+                        onClick = {
+                            onValoreCambiato(op)
+                            menuAperto = false
+                        }
+                    )
+                }
             }
         }
     }
