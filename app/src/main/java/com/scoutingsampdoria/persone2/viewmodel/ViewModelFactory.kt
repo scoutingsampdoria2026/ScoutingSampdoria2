@@ -23,6 +23,8 @@ class ViewModelFactory(private val context: Context) : ViewModelProvider.Factory
                 ConvocazioniViewModel(repository) as T
             modelClass.isAssignableFrom(ConfigViewModel::class.java) ->
                 ConfigViewModel(repository) as T
+            modelClass.isAssignableFrom(ProviniViewModel::class.java) ->
+                ProviniViewModel(repository) as T
             else -> throw IllegalArgumentException("ViewModel sconosciuto: ${modelClass.name}")
         }
     }
