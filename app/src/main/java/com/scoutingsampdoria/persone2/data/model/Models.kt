@@ -69,3 +69,31 @@ data class ConvocazioneGiocatore(
     val nome: String? = null,
     val ruolo: String? = null,
 )
+
+data class Provino(
+    val id: Int,
+    val personaId: Int,
+    val convocazioneId: Int,
+    val data: String? = null,
+    val ora: String? = null,
+    val impianto: String? = null,
+    val presenza: String? = null,
+    val giudizio: Int? = null,
+    val note: String? = null,
+    // Campi opzionali per la UI (join con persone e convocazioni)
+    val cognome: String? = null,
+    val nome: String? = null,
+    val ruolo: String? = null,
+    val categoria: String? = null,
+    val squadraCasa: String? = null,
+    val squadraOspite: String? = null,
+    val creatoIl: String? = null,
+    val aggiornatoIl: String? = null,
+)
+
+data class StatisticheProvini(
+    val totaleProvini: Int,
+    val giocatoriConProvino: Int,
+    val totaleGiocatori: Int,
+    val mediaPerGiocatore: Double,
+)
