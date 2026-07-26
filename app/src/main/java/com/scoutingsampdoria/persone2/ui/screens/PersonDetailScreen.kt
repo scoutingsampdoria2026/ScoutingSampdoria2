@@ -18,6 +18,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowBack
+import androidx.compose.material.icons.filled.Assignment
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Star
@@ -54,16 +56,22 @@ import androidx.compose.ui.unit.dp
 import com.scoutingsampdoria.persone2.data.model.Persona
 import com.scoutingsampdoria.persone2.ui.theme.SampColors
 import com.scoutingsampdoria.persone2.viewmodel.PersoneViewModel
+import com.scoutingsampdoria.persone2.viewmodel.ProviniViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PersonDetailScreen(
     viewModel: PersoneViewModel,
+    proviniViewModel: ProviniViewModel,
     idPersona: Int,
     onIndietro: () -> Unit,
     onModifica: () -> Unit,
+    onApriElencoProvini: (Int) -> Unit,
 ) {
-    LaunchedEffect(idPersona) { viewModel.caricaDettaglio(idPersona) }
+    LaunchedEffect(idPersona) {
+        viewModel.caricaDettaglio(idPersona)
+        proviniViewModel.caricaProviniPersona(idPersona)
+    }
 
     var mostraConfermaElimina by remember { mutableStateOf(false) }
     val p = viewModel.personaSelezionata
@@ -168,7 +176,11 @@ fun PersonDetailScreen(
                 Column(modifier = Modifier.fillMaxSize()
                     .verticalScroll(rememberScrollState()).padding(16.dp)) {
                     when (tabSelezionato) {
-                        0 -> TabInfo(p)
+                        0 -> TabInfo(
+                            p = p,
+                            numeroProvini = proviniViewModel.provini.size,
+                            onApriProvini = { onApriElencoProvini(idPersona) }
+                        )
                         1 -> TabCustom(p)
                     }
                 }
@@ -198,7 +210,11 @@ fun PersonDetailScreen(
 }
 
 @Composable
-private fun TabInfo(p: Persona) {
+private fun TabInfo(
+    p: Persona,
+    numeroProvini: Int = 0,
+    onApriProvini: () -> Unit = {}
+) {
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         InfoCard("Data nascita", p.dataNascita ?: "-", Modifier.weight(1f))
         InfoCard("Regione", p.regione ?: "-", Modifier.weight(1f))
@@ -220,6 +236,48 @@ private fun TabInfo(p: Persona) {
                     color = SampColors.Rosso, fontWeight = FontWeight.Bold)
                 Text(p.quickReport, style = MaterialTheme.typography.bodyMedium)
             }
+        }
+        Spacer(Modifier.height(8.dp))
+    }
+    // Card Provini con conteggio, sempre visibile
+    Card(
+        shape = RoundedCornerShape(12.dp),
+        colors = CardDefaults.cardColors(containerColor = SampColors.BluNebbia),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        onClick = onApriProvini,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Row(
+            modifier = Modifier.padding(16.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Filled.Assignment,
+                contentDescription = null,
+                tint = SampColors.Blu,
+                modifier = Modifier.size(28.dp)
+            )
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    "PROVINI",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = SampColors.Blu,
+                    fontWeight = FontWeight.Bold
+                )
+                Text(
+                    text = if (numeroProvini == 0) "Nessun provino"
+                           else "$numeroProvini provin${if (numeroProvini == 1) "o" else "i"}",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
+                    color = SampColors.Nero
+                )
+            }
+            Icon(
+                imageVector = Icons.Filled.ChevronRight,
+                contentDescription = null,
+                tint = SampColors.TestoMuto
+            )
         }
     }
 }
