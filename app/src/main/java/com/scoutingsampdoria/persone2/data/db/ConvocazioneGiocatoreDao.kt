@@ -29,6 +29,9 @@ interface ConvocazioneGiocatoreDao {
     @Query("DELETE FROM convocazione_giocatori WHERE convocazione_id = :convocazioneId")
     suspend fun eliminaPerConvocazione(convocazioneId: Int)
 
+    @Query("SELECT DISTINCT persona_id FROM convocazione_giocatori WHERE convocazione_id = :convocazioneId AND persona_id IS NOT NULL")
+    suspend fun personIdsPerConvocazione(convocazioneId: Int): List<Int>
+
     @Transaction
     suspend fun sostituisciTutti(convocazioneId: Int, nuovi: List<ConvocazioneGiocatoreEntity>) {
         eliminaPerConvocazione(convocazioneId)
