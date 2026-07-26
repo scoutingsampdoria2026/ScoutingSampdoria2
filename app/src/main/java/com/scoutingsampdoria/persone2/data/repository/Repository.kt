@@ -5,12 +5,19 @@ import com.scoutingsampdoria.persone2.data.db.CampoCustomEntity
 import com.scoutingsampdoria.persone2.data.db.ConvocazioneEntity
 import com.scoutingsampdoria.persone2.data.db.ConvocazioneGiocatoreEntity
 import com.scoutingsampdoria.persone2.data.db.PersonaEntity
+import com.scoutingsampdoria.persone2.data.db.ProvinoConJoinRow
+import com.scoutingsampdoria.persone2.data.db.ProvinoEntity
 import com.scoutingsampdoria.persone2.data.db.ScoutingDatabase
 import com.scoutingsampdoria.persone2.data.model.CampoCustom
 import com.scoutingsampdoria.persone2.data.model.Convocazione
 import com.scoutingsampdoria.persone2.data.model.ConvocazioneGiocatore
 import com.scoutingsampdoria.persone2.data.model.LogAdmin
 import com.scoutingsampdoria.persone2.data.model.Persona
+import com.scoutingsampdoria.persone2.data.model.Provino
+import com.scoutingsampdoria.persone2.data.model.StatisticheProvini
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 /**
  * Repository unico dell'app 2.0: incapsula tutte le operazioni sul DB Room locale.
@@ -48,7 +55,11 @@ class Repository(private val db: ScoutingDatabase) {
     }
 
     suspend fun creaPersona(persona: Persona): Int {
-        val id = db.personaDao().inserisci(modelToEntity(persona))
+        // Garantisco STATO = "Segnalato" se non specificato
+        val extra = (persona.extra ?: emptyMap()).toMutableMap()
+        if (extra["STATO"].isNullOrBlank()) extra["STATO"] = "Segnalato"
+        val personaConStato = persona.copy(extra = extra)
+        val id = db.personaDao().inserisci(modelToEntity(personaConStato))
         return id.toInt()
     }
 
@@ -171,6 +182,15 @@ class Repository(private val db: ScoutingDatabase) {
     }
 
     suspend fun aggiornaGiocatoriConvocazione(convocazioneId: Int, giocatori: List<ConvocazioneGiocatore>) {
+        // 1. Leggo la convocazione per copiare data/ora/impianto nei nuovi provini
+        val conv = db.convocazioneDao().byId(convocazioneId)
+
+        // 2. Trova personaId prima e dopo l'aggiornamento
+        val idPrima = db.convocazioneGiocatoreDao()
+            .personIdsPerConvocazione(convocazioneId).toSet()
+        val idDopo = giocatori.mapNotNull { it.personaId }.toSet()
+
+        // 3. Sostituisci elenco convocati
         val entities = giocatori.map { g ->
             ConvocazioneGiocatoreEntity(
                 convocazioneId = convocazioneId,
@@ -181,7 +201,113 @@ class Repository(private val db: ScoutingDatabase) {
             )
         }
         db.convocazioneGiocatoreDao().sostituisciTutti(convocazioneId, entities)
+
+        // 4. Sincronizza provini: crea per i nuovi convocati, elimina per rimossi (se vuoti)
+        val provinoDao = db.provinoDao()
+        val ora = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ITALIAN).format(Date())
+
+        // Nuovi: creo provino vuoto solo se non esiste già
+        val nuovi = idDopo - idPrima
+        nuovi.forEach { personaId ->
+            if (provinoDao.esiste(convocazioneId, personaId) == 0) {
+                provinoDao.inserisci(ProvinoEntity(
+                    personaId = personaId,
+                    convocazioneId = convocazioneId,
+                    data = conv?.data,
+                    ora = conv?.ora,
+                    impianto = conv?.impianto,
+                    creatoIl = ora,
+                    aggiornatoIl = ora,
+                ))
+            }
+        }
+
+        // Rimossi: elimino solo se il provino è vuoto (nessun dato compilato)
+        val rimossi = idPrima - idDopo
+        rimossi.forEach { personaId ->
+            provinoDao.eliminaSeVuoto(convocazioneId, personaId)
+        }
     }
+
+    // ------------------- PROVINI -------------------
+
+    suspend fun listaProviniPersona(personaId: Int): List<Provino> {
+        return db.provinoDao().perPersonaConJoin(personaId).map(::rowToProvino)
+    }
+
+    suspend fun contaProviniPersona(personaId: Int): Int {
+        return db.provinoDao().contaPerPersona(personaId)
+    }
+
+    suspend fun dettaglioProvino(id: Int): Provino? {
+        return db.provinoDao().dettaglioConJoin(id)?.let(::rowToProvino)
+    }
+
+    suspend fun aggiornaProvino(id: Int, presenza: String?, giudizio: Int?, note: String?) {
+        val ora = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.ITALIAN).format(Date())
+        db.provinoDao().aggiornaCampi(
+            id = id,
+            presenza = presenza?.takeIf { it.isNotBlank() },
+            giudizio = giudizio,
+            note = note?.takeIf { it.isNotBlank() },
+            aggiornatoIl = ora,
+        )
+    }
+
+    suspend fun eliminaProvino(id: Int) {
+        db.provinoDao().eliminaById(id)
+    }
+
+    // === Dashboard provini ===
+
+    suspend fun statisticheProvini(): StatisticheProvini {
+        val totaleGiocatori = db.personaDao().conta()
+        val totaleProvini = db.provinoDao().contaCompilati()
+        val giocatoriConProvino = db.provinoDao().contaGiocatoriConProvino()
+        val media = if (totaleGiocatori > 0) {
+            val v = totaleProvini.toDouble() / totaleGiocatori.toDouble()
+            // Arrotondo a 2 decimali
+            Math.round(v * 100.0) / 100.0
+        } else 0.0
+        return StatisticheProvini(
+            totaleProvini = totaleProvini,
+            giocatoriConProvino = giocatoriConProvino,
+            totaleGiocatori = totaleGiocatori,
+            mediaPerGiocatore = media,
+        )
+    }
+
+    suspend fun elencoProviniDashboard(categoria: String? = null, data: String? = null): List<Provino> {
+        return db.provinoDao().dashboardFiltrata(
+            categoria = categoria?.takeIf { it.isNotBlank() },
+            data = data?.takeIf { it.isNotBlank() }
+        ).map(::rowToProvino)
+    }
+
+    suspend fun categorieProvini(): List<String> = db.provinoDao().categorieDisponibili()
+
+    suspend fun dateProvini(categoria: String? = null): List<String> =
+        db.provinoDao().dateDisponibili(categoria?.takeIf { it.isNotBlank() })
+
+    private fun rowToProvino(r: ProvinoConJoinRow): Provino = Provino(
+        id = r.id,
+        personaId = r.personaId,
+        convocazioneId = r.convocazioneId,
+        data = r.data,
+        ora = r.ora,
+        impianto = r.impianto,
+        presenza = r.presenza,
+        giudizio = r.giudizio,
+        note = r.note,
+        cognome = r.cognome,
+        nome = r.nome,
+        ruolo = r.ruolo,
+        categoria = r.categoria,
+        squadraCasa = r.squadraCasa,
+        squadraOspite = r.squadraOspite,
+        creatoIl = r.creatoIl,
+        aggiornatoIl = r.aggiornatoIl,
+    )
 
     // ------------------- LOG -------------------
 
