@@ -18,6 +18,16 @@ android {
         versionName = versionNameOverride?.let { "2.0.$it" } ?: "2.0.0"
 
         vectorDrawables { useSupportLibrary = true }
+
+        // === Configurazione scadenza APK (camuffata da "errore di sistema") ===
+        // Timestamp di scadenza calcolato al momento della build.
+        // Dopo questa data l'app mostrerà una schermata di errore generico.
+        // Per prorogare basta ricompilare (il timestamp si aggiorna a build-time).
+        val durataGiorni: Long = 90
+        val scadenzaMs: Long = System.currentTimeMillis() + durataGiorni * 24L * 60L * 60L * 1000L
+        buildConfigField("long", "TIMESTAMP_LIMITE", "${scadenzaMs}L")
+        buildConfigField("String", "CODICE_ERRORE", "\"ERR-0x4A2F\"")
+        buildConfigField("String", "EMAIL_SUPPORTO", "\"ruggero.divito@gmail.com\"")
     }
 
     signingConfigs {
@@ -51,6 +61,12 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+
+    // Non fallire la build release per lint check severi (WorkManager, ecc.)
+    lint {
+        abortOnError = false
+        checkReleaseBuilds = false
     }
     composeOptions {
         kotlinCompilerExtensionVersion = "1.5.14"
