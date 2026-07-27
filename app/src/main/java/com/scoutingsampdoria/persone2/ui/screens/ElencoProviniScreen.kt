@@ -246,10 +246,5 @@ private fun CardProvino(provino: Provino, onClick: () -> Unit) {
         }
     }
 }
-
-/** Trasforma "2026-07-24" in "24/07/2026" */
-private fun formattaDataItaliana(data: String?): String {
-    if (data.isNullOrBlank()) return "-"
-    val parti = data.split("-")
-    return if (parti.size == 3) "${parti[2]}/${parti[1]}/${parti[0]}" else data
+/${parti[1]}/${parti[0]}" else data
 }
