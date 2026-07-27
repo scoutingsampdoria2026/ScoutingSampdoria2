@@ -20,6 +20,7 @@ import com.scoutingsampdoria.persone2.ui.screens.ConvocazioneDetailScreen
 import com.scoutingsampdoria.persone2.ui.screens.ConvocazioniHomeScreen
 import com.scoutingsampdoria.persone2.ui.screens.ConvocazioniListaScreen
 import com.scoutingsampdoria.persone2.ui.screens.ElencoProviniScreen
+import com.scoutingsampdoria.persone2.ui.screens.ErroreSistemaScreen
 import com.scoutingsampdoria.persone2.ui.screens.HomeScreen
 import com.scoutingsampdoria.persone2.ui.screens.PersonDetailScreen
 import com.scoutingsampdoria.persone2.ui.screens.PersonFormScreen
@@ -27,6 +28,7 @@ import com.scoutingsampdoria.persone2.ui.screens.PersonListScreen
 import com.scoutingsampdoria.persone2.ui.screens.ProviniDashboardScreen
 import com.scoutingsampdoria.persone2.ui.screens.ProvinoDetailScreen
 import com.scoutingsampdoria.persone2.ui.screens.SbloccoScreen
+import com.scoutingsampdoria.persone2.util.GestoreScadenza
 import com.scoutingsampdoria.persone2.util.MonitorInattivita
 import com.scoutingsampdoria.persone2.util.tracciaInterazione
 import com.scoutingsampdoria.persone2.viewmodel.AuthViewModel
@@ -60,6 +62,12 @@ object Rotte {
 
 @Composable
 fun ScoutingNavGraph(factory: ViewModelFactory) {
+    // Verifica scadenza APK all'ingresso: se scaduta, mostra solo la schermata di errore camuffato
+    if (GestoreScadenza.appNonPiuUtilizzabile()) {
+        ErroreSistemaScreen()
+        return
+    }
+
     val navController = rememberNavController()
     val authViewModel: AuthViewModel = viewModel(factory = factory)
     val personeViewModel: PersoneViewModel = viewModel(factory = factory)
