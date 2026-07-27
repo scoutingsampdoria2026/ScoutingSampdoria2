@@ -418,5 +418,4 @@ private fun CardProvinoDashboard(provino: Provino, onClick: () -> Unit) {
         }
     }
 }
-/${parti[1]}/${parti[0]}" else data
-}
+
